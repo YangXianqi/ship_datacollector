@@ -41,25 +41,134 @@ This repository now includes:
 
 ## Local setup notes
 
-- Backend build is verified with JDK 17 and Gradle 8.7.
-- Admin web build is verified with Node 20 and npm 10.
-- Android build is verified against a local Android SDK install.
+### What a fresh clone includes
 
-### Android SDK
+The GitHub repository includes:
 
-This machine is currently configured with:
+- all source code
+- Gradle wrapper for `backend/` and `android-app/`
+- npm lockfile for `admin-web/`
+- docs and helper scripts
 
-```properties
-sdk.dir=/home/sm6/project/.android-sdk
+The GitHub repository does **not** include:
+
+- JDK
+- Android SDK
+- Android emulator / AVD files
+- local PostgreSQL binaries or data directories
+- Gradle caches
+- build outputs
+
+### Required software on a new machine
+
+To run this project after cloning, install:
+
+- Git
+- JDK 17
+- Node.js 20 and npm 10
+- Android Studio or Android SDK command line tools
+
+Optional:
+
+- PostgreSQL 16 if you want to run the backend with PostgreSQL instead of the default H2 local mode
+- Android Emulator if you want to run the APK in an emulator
+
+### Recommended first-run order
+
+1. Clone the repo
+2. Start the backend
+3. Start the admin web
+4. Build or run the Android app
+
+### Backend
+
+The backend requires Java 17. Gradle does **not** need to be installed globally because the repo already includes `backend/gradlew`.
+
+Quick local start with embedded H2 storage:
+
+```bash
+cd backend
+./gradlew bootRun
 ```
 
-If you need to recreate it manually, create `android-app/local.properties` with your SDK path:
+Build check:
+
+```bash
+cd backend
+./gradlew build
+```
+
+Run with PostgreSQL:
+
+```bash
+cd backend
+SPRING_PROFILES_ACTIVE=postgres \
+SPRING_DATASOURCE_URL=jdbc:postgresql://127.0.0.1:5432/shipyard \
+SPRING_DATASOURCE_USERNAME=shipyard \
+SPRING_DATASOURCE_PASSWORD=shipyard \
+./gradlew bootRun
+```
+
+Notes:
+
+- default backend port is `8080`
+- if `8080` is already in use, run `./gradlew bootRun --args='--server.port=8081'`
+- the helper scripts under `scripts/` were created for one specific local machine and depend on ignored local directories such as `.postgres-dist/`; teammates pulling from GitHub should not rely on those scripts unless they prepare the same local assets themselves
+
+Seeded accounts:
+
+- Admin: `13900000000 / admin123`
+- Worker: `13800000000 / worker123`
+
+### Admin web
+
+The admin web requires Node.js and npm.
+
+Install dependencies and start dev mode:
+
+```bash
+cd admin-web
+npm install
+npm run dev
+```
+
+Optional explicit backend URL:
+
+```bash
+cd admin-web
+VITE_API_BASE_URL=http://localhost:8080/api npm run dev
+```
+
+Production build check:
+
+```bash
+cd admin-web
+npm run build
+```
+
+Default dev address:
+
+- `http://localhost:5173`
+
+### Android app
+
+The Android app requires Android SDK and Java 17. Gradle does **not** need to be installed globally because the repo already includes `android-app/gradlew`.
+
+Recommended Android SDK components:
+
+- Android SDK Platform 34
+- Android SDK Build-Tools 34.0.0
+- Android SDK Platform-Tools
+- Android SDK Command-line Tools
+- Android Emulator and one API 34 system image if you want to run an emulator
+
+Create `android-app/local.properties` on your own machine:
 
 ```properties
 sdk.dir=/path/to/Android/Sdk
 ```
 
-Then build with:
+Build debug APK:
 
 ```bash
 cd android-app
@@ -68,71 +177,10 @@ cd android-app
 
 Android API base URL is currently set in [app/build.gradle.kts](/home/sm6/project/android-app/app/build.gradle.kts) as:
 
-- Emulator default: `http://10.0.2.2:8080/api`
-- If you run on a physical Android device, change it to your backend machine's LAN IP
-- Captured images and audio are stored in the app-private `files/media/` directory
+- emulator default: `http://10.0.2.2:8080/api`
+- if you run on a physical Android device, change it to your backend machine's LAN IP
 
-### Backend
-
-```bash
-cd backend
-./gradlew build
-```
-
-Run with embedded H2-compatible storage:
-
-```bash
-cd backend
-./gradlew bootRun
-```
-
-Run with PostgreSQL profile:
-
-```bash
-cd backend
-SPRING_PROFILES_ACTIVE=postgres \
-SPRING_DATASOURCE_URL=jdbc:postgresql://localhost:5432/shipyard \
-SPRING_DATASOURCE_USERNAME=shipyard \
-SPRING_DATASOURCE_PASSWORD=shipyard \
-./gradlew bootRun
-```
-
-Run with the repo-local PostgreSQL instance that was set up for this project:
-
-```bash
-./scripts/start-local-postgres.sh
-source ./scripts/backend-postgres-env.sh
-/home/sm6/project/.tools/gradle-8.7/bin/gradle -Djava.io.tmpdir=/home/sm6/project/.tmp -p /home/sm6/project/backend bootRun --no-daemon
-```
-
-Stop the repo-local PostgreSQL instance:
-
-```bash
-./scripts/stop-local-postgres.sh
-```
-
-Seeded accounts:
-
-- Admin: `13900000000 / admin123`
-- Worker: `13800000000 / worker123`
-- Uploaded attachment payloads are decoded and stored under `backend/build/attachments/<recordId>/`
-- Verified local PostgreSQL database: `shipyard`
-- Verified local PostgreSQL role: `shipyard / shipyard`
-
-### Admin web
-
-```bash
-cd admin-web
-npm install
-npm run build
-```
-
-Optional dev override:
-
-```bash
-cd admin-web
-VITE_API_BASE_URL=http://localhost:8080/api npm run dev
-```
+Captured images and audio are stored in the app-private `files/media/` directory.
 
 ## Next recommended steps
 
