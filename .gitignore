@@ -1,0 +1,52 @@
+# OS / Editor
+.DS_Store
+.idea/
+.vscode/
+.fleet/
+*.iml
+
+# Local tooling / caches
+.tools/
+.tmp/
+.gradle-home/
+.gradle/
+.postgres-data/
+.postgres-dist/
+.postgres-logs/
+.postgres-run/
+.android-sdk/
+.android-avd/
+.android-user/
+.agents/
+.codex/
+
+# Local env / secrets
+.env
+.env.*
+!.env.example
+
+# Repo-level build output
+build/
+
+# Android
+android-app/.gradle/
+android-app/local.properties
+android-app/**/build/
+android-app/captures/
+
+# Spring Boot
+backend/.gradle/
+backend/build/
+
+# Node
+admin-web/node_modules/
+admin-web/dist/
+admin-web/.vite/
+admin-web/.env.local
+admin-web/.env.*.local
+
+# Logs
+*.log
+*.pid
+*.out
+*.err

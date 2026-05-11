@@ -1,0 +1,28 @@
+:root {
+  font-family: "Segoe UI", "Helvetica Neue", sans-serif;
+  color: #132a2f;
+  background: linear-gradient(180deg, #e6f4f1 0%, #f6f7f4 35%, #ffffff 100%);
+}
+
+body {
+  margin: 0;
+}
+
+.app-shell {
+  min-height: 100vh;
+  background: transparent;
+}
+
+.app-header {
+  background: linear-gradient(135deg, #134e4a 0%, #0f766e 100%);
+  display: flex;
+  align-items: center;
+}
+
+.app-content {
+  padding: 24px;
+}
+
+.selected-row td {
+  background: #e6fffb !important;
+}
