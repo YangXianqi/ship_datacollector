@@ -1,6 +1,7 @@
 package com.shipyard.collector.data.remote
 
 import android.util.Base64
+import android.util.Log
 import com.shipyard.collector.BuildConfig
 import com.shipyard.collector.model.CaptureRecord
 import com.shipyard.collector.model.FormSummary
@@ -17,6 +18,7 @@ import java.io.InputStreamReader
 import java.io.RandomAccessFile
 import java.net.HttpURLConnection
 import java.net.URL
+import java.util.UUID
 import kotlin.math.min
 
 class HttpCollectorApi(
@@ -54,9 +56,10 @@ class HttpCollectorApi(
         record: CaptureRecord,
         onProgress: suspend (UploadProgress) -> Unit
     ): UploadResponse = withContext(Dispatchers.IO) {
+        val traceContext = RequestTraceContext.forRecord(record.recordId)
         val fileSpecs = buildFileSpecs(record)
         val totalBytes = fileSpecs.sumOf { it.totalBytes }
-        val sessionState = initUpload(session, record, fileSpecs)
+        val sessionState = initUpload(session, record, fileSpecs, traceContext)
         if (sessionState.status.equals("UPLOADED", ignoreCase = true) && sessionState.uploadedAtEpochMillis != null) {
             onProgress(
                 UploadProgress(
@@ -82,7 +85,8 @@ class HttpCollectorApi(
                 session = session,
                 recordId = record.recordId,
                 fileSpec = spec,
-                initialUploadedBytes = initialUploadedBytes
+                initialUploadedBytes = initialUploadedBytes,
+                traceContext = traceContext.withFile(fileId = spec.fileId)
             ) { uploadedBytes ->
                 uploadedBytesByFile[spec.fileId] = uploadedBytes
                 emitAggregateProgress(
@@ -98,10 +102,11 @@ class HttpCollectorApi(
         request(
             path = "/uploads/${record.recordId}/complete",
             method = "POST",
-            bearerToken = session.authToken
+            bearerToken = session.authToken,
+            traceContext = traceContext
         )
 
-        val detail = fetchUploadDetail(session, record.recordId)
+        val detail = fetchUploadDetail(session, record.recordId, traceContext)
         val success = detail.status.equals("UPLOADED", ignoreCase = true) && detail.uploadedAtEpochMillis != null
         val message = detail.message.ifBlank { if (success) "上传成功" else "上传失败" }
         onProgress(
@@ -124,7 +129,8 @@ class HttpCollectorApi(
     private fun initUpload(
         session: LoginSession,
         record: CaptureRecord,
-        fileSpecs: List<UploadFileSpec>
+        fileSpecs: List<UploadFileSpec>,
+        traceContext: RequestTraceContext
     ): UploadSessionState {
         val body = JSONObject()
             .put("recordId", record.recordId)
@@ -139,7 +145,8 @@ class HttpCollectorApi(
             path = "/uploads/init",
             method = "POST",
             bearerToken = session.authToken,
-            body = body.toString()
+            body = body.toString(),
+            traceContext = traceContext
         )
         return parseUploadSession(JSONObject(response.body))
     }
@@ -149,6 +156,7 @@ class HttpCollectorApi(
         recordId: String,
         fileSpec: UploadFileSpec,
         initialUploadedBytes: Long,
+        traceContext: RequestTraceContext,
         onUploadedBytes: suspend (Long) -> Unit
     ) {
         if (initialUploadedBytes >= fileSpec.totalBytes) {
@@ -175,7 +183,8 @@ class HttpCollectorApi(
                     path = "/uploads/$recordId/files/${fileSpec.fileId}/chunks",
                     method = "POST",
                     bearerToken = session.authToken,
-                    body = chunkBody.toString()
+                    body = chunkBody.toString(),
+                    traceContext = traceContext
                 )
                 val payload = JSONObject(response.body)
                 val confirmedUploadedBytes = payload.getLong("uploadedBytes")
@@ -188,11 +197,16 @@ class HttpCollectorApi(
         }
     }
 
-    private fun fetchUploadDetail(session: LoginSession, recordId: String): UploadSessionState {
+    private fun fetchUploadDetail(
+        session: LoginSession,
+        recordId: String,
+        traceContext: RequestTraceContext
+    ): UploadSessionState {
         val response = request(
             path = "/uploads/$recordId",
             method = "GET",
-            bearerToken = session.authToken
+            bearerToken = session.authToken,
+            traceContext = traceContext
         )
         return parseUploadSession(JSONObject(response.body))
     }
@@ -312,37 +326,83 @@ class HttpCollectorApi(
         path: String,
         method: String,
         bearerToken: String? = null,
-        body: String? = null
+        body: String? = null,
+        traceContext: RequestTraceContext? = null
     ): RawResponse {
         val normalizedBase = baseUrl.trimEnd('/')
-        val connection = (URL("$normalizedBase$path").openConnection() as HttpURLConnection).apply {
-            requestMethod = method
-            connectTimeout = 10_000
-            readTimeout = 15_000
-            setRequestProperty("Content-Type", "application/json")
-            setRequestProperty("Accept", "application/json")
-            if (!bearerToken.isNullOrBlank()) {
-                setRequestProperty("Authorization", "Bearer $bearerToken")
-            }
-            doInput = true
-            if (body != null) {
-                doOutput = true
-                outputStream.use { output ->
-                    output.write(body.toByteArray())
+        val requestLabel = "$method $path"
+        var connection: HttpURLConnection? = null
+
+        try {
+            connection = (URL("$normalizedBase$path").openConnection() as HttpURLConnection).apply {
+                requestMethod = method
+                connectTimeout = 10_000
+                readTimeout = 15_000
+                setRequestProperty("Content-Type", "application/json")
+                setRequestProperty("Accept", "application/json")
+                if (!bearerToken.isNullOrBlank()) {
+                    setRequestProperty("Authorization", "Bearer $bearerToken")
+                }
+                traceContext?.traceId?.let { setRequestProperty(TRACE_ID_HEADER, it) }
+                traceContext?.recordId?.let { setRequestProperty(RECORD_ID_HEADER, it) }
+                traceContext?.fileId?.let { setRequestProperty(FILE_ID_HEADER, it) }
+                doInput = true
+                if (body != null) {
+                    doOutput = true
+                    outputStream.use { output ->
+                        output.write(body.toByteArray())
+                    }
                 }
             }
-        }
 
-        return try {
             val code = connection.responseCode
             val stream = if (code in 200..299) connection.inputStream else connection.errorStream
             val responseBody = stream.readTextSafely()
             if (code !in 200..299) {
-                throw IllegalStateException(extractErrorMessage(responseBody, code))
+                val errorMessage = extractErrorMessage(responseBody, code)
+                logApiFailure(
+                    requestLabel = requestLabel,
+                    statusCode = code,
+                    message = errorMessage,
+                    traceContext = traceContext,
+                    throwable = null
+                )
+                throw IllegalStateException("接口 $requestLabel 失败：$errorMessage")
             }
-            RawResponse(code, responseBody)
+            return RawResponse(code, responseBody)
+        } catch (throwable: Exception) {
+            if (throwable is IllegalStateException && throwable.message?.startsWith("接口 ") == true) {
+                throw throwable
+            }
+            val message = throwable.message ?: throwable.javaClass.simpleName
+            logApiFailure(
+                requestLabel = requestLabel,
+                statusCode = null,
+                message = message,
+                traceContext = traceContext,
+                throwable = throwable
+            )
+            throw IllegalStateException("接口 $requestLabel 异常：$message", throwable)
         } finally {
-            connection.disconnect()
+            connection?.disconnect()
+        }
+    }
+
+    private fun logApiFailure(
+        requestLabel: String,
+        statusCode: Int?,
+        message: String,
+        traceContext: RequestTraceContext?,
+        throwable: Throwable?
+    ) {
+        val traceId = traceContext?.traceId ?: "-"
+        val recordId = traceContext?.recordId ?: "-"
+        val fileId = traceContext?.fileId ?: "-"
+        val logMessage = "API failure request=$requestLabel status=${statusCode ?: "-"} traceId=$traceId recordId=$recordId fileId=$fileId message=$message"
+        if (throwable == null) {
+            Log.e(LOG_TAG, logMessage)
+        } else {
+            Log.e(LOG_TAG, logMessage, throwable)
         }
     }
 
@@ -411,7 +471,27 @@ class HttpCollectorApi(
         val body: String
     )
 
+    private data class RequestTraceContext(
+        val traceId: String,
+        val recordId: String?,
+        val fileId: String?
+    ) {
+        fun withFile(fileId: String): RequestTraceContext = copy(fileId = fileId)
+
+        companion object {
+            fun forRecord(recordId: String): RequestTraceContext = RequestTraceContext(
+                traceId = "upload-$recordId-${UUID.randomUUID().toString().take(8)}",
+                recordId = recordId,
+                fileId = null
+            )
+        }
+    }
+
     companion object {
+        private const val LOG_TAG = "HttpCollectorApi"
         private const val CHUNK_SIZE_BYTES = 192 * 1024
+        private const val TRACE_ID_HEADER = "X-Trace-Id"
+        private const val RECORD_ID_HEADER = "X-Record-Id"
+        private const val FILE_ID_HEADER = "X-File-Id"
     }
 }
